@@ -1,15 +1,200 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Smart Map</title>
 
-  <!DOCTYPE html>
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Bangalore Smart City Dashboard</title>
-    </head>
+  <!-- Leaflet CSS + JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-    <body>
-      <div id="root"></div>
-      <script type="module" src="/src/main.tsx"></script>
-    </body>
-  </html>
-  
+  <!-- Routing -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
+
+  <!-- Geocoder -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+  <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+
+  <!-- Heatmap -->
+  <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+  <style>
+    body,html,#map{
+      margin:0;padding:0;height:100%;
+      transition: background 0.3s;
+    }
+
+    /* Control Panel */
+    #panel{
+      position:absolute;top:10px;left:10px;z-index:1000;
+      background:white;padding:12px;border-radius:10px;
+      box-shadow:0 2px 8px rgba(0,0,0,0.2);
+      font-family:Arial;font-size:14px;max-width:260px;
+    }
+
+    #panel.dark{
+      background:#222;color:white;
+    }
+
+    #panel input[type="text"]{
+      width:100%;padding:6px;margin-top:8px;border-radius:5px;
+      border:1px solid #ccc;
+    }
+
+    #closePanel{
+      float:right;cursor:pointer;
+      background:#e74c3c;color:white;border:none;
+      padding:2px 6px;border-radius:4px;
+    }
+
+    #openPanel{
+      position:absolute;top:10px;left:10px;z-index:999;
+      background:black;color:white;padding:6px 12px;
+      border-radius:6px;cursor:pointer;display:none;
+      font-size:14px;
+    }
+
+    .toggleRow{margin-top:6px;}
+  </style>
+</head>
+
+<body>
+
+<button id="openPanel">Open Controls</button>
+
+<div id="panel">
+  <button id="closePanel">X</button>
+  <strong>Smart Map Controls</strong>
+
+  <div class="toggleRow">
+    <label><input id="aqiToggle" type="checkbox" checked> Show AQI</label>
+  </div>
+  <div class="toggleRow">
+    <label><input id="heatToggle" type="checkbox" checked> Heatmap</label>
+  </div>
+  <div class="toggleRow">
+    <label><input id="weatherToggle" type="checkbox"> Weather Layer</label>
+  </div>
+  <div class="toggleRow">
+    <label><input id="darkToggle" type="checkbox"> Dark Mode Map</label>
+  </div>
+
+  <input id="owmKey" placeholder="OpenWeatherMap API Key" />
+</div>
+
+<div id="map"></div>
+
+<script>
+/* MAP INITIAL */
+let lightTiles='https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+let darkTiles='https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+
+const map=L.map('map').setView([12.9716,77.5946],12);
+let tileLayer=L.tileLayer(lightTiles,{maxZoom:19}).addTo(map);
+
+/* Layers */
+const aqiLayer=L.layerGroup().addTo(map);
+const heatLayerGroup=L.layerGroup().addTo(map);
+let heatLayer=null;
+let weather={layer:null};
+
+/* Search & Routing */
+L.Control.geocoder().addTo(map);
+const routing=L.Routing.control({
+  router:L.Routing.osrmv1({serviceUrl:'https://router.project-osrm.org/route/v1'}),
+  showAlternatives:false
+}).addTo(map);
+
+/* Click-to-route */
+let pts=[];
+map.on('click',e=>{
+  pts.push(e.latlng);
+  if(pts.length===2){
+    routing.setWaypoints([pts[0],pts[1]]);
+    pts=[];
+  }
+});
+
+
+/* FIXED AQI LOADER */
+async function loadAQI(){
+  aqiLayer.clearLayers();
+  heatLayerGroup.clearLayers();
+  heatLayer=null;
+
+  const b=map.getBounds();
+  const url=`https://api.openaq.org/v2/latest?limit=300&bbox=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+  const r=await fetch(url);
+  const j=await r.json();
+
+  const ptsHeat=[];
+
+  (j.results || []).forEach(p=>{
+    if(!p.coordinates) return;
+
+    // FIX: get ANY pollutant value
+    let v=0;
+    if(p.measurements && p.measurements.length>0){
+      v = p.measurements[0].value || 0;
+    }
+
+    const lat=p.coordinates.latitude;
+    const lon=p.coordinates.longitude;
+
+    L.circleMarker([lat,lon],{
+      radius:6,fillOpacity:0.9,color:'#ff6600'
+    }).addTo(aqiLayer).bindPopup(`Value: ${v}`);
+
+    ptsHeat.push([lat,lon, Math.min(1, v/50) ]);
+  });
+
+  heatLayer=L.heatLayer(ptsHeat,{radius:25,blur:30});
+  heatLayerGroup.addLayer(heatLayer);
+}
+
+map.on('moveend', ()=>{ if(aqiToggle.checked) loadAQI(); });
+loadAQI();
+
+
+/* Toggles */
+aqiToggle.onchange=()=> aqiToggle.checked ? map.addLayer(aqiLayer) : map.removeLayer(aqiLayer);
+heatToggle.onchange=()=> heatToggle.checked ? map.addLayer(heatLayerGroup) : map.removeLayer(heatLayerGroup);
+
+weatherToggle.onchange=()=>{
+  const key = owmKey.value.trim();
+  if(!key){
+    alert("85825b41e4d2bbe49b60bd39e7e4e8c2");
+    weatherToggle.checked=false;
+    return;
+  }
+  if(weatherToggle.checked){
+    weather.layer = L.tileLayer(`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${"85825b41e4d2bbe49b60bd39e7e4e8c2y"}`, {opacity:0.6});
+    weather.layer.addTo(map);
+  } else {
+    if(weather.layer) map.removeLayer(weather.layer);
+  }
+};
+
+/* DARK MODE TOGGLE */
+darkToggle.onchange = () => {
+  map.removeLayer(tileLayer);
+  tileLayer = L.tileLayer(darkToggle.checked ? darkTiles : lightTiles);
+  tileLayer.addTo(map);
+};
+
+/* PANEL HIDE/SHOW */
+closePanel.onclick = () => {
+  panel.style.display="none";
+  openPanel.style.display="block";
+};
+
+openPanel.onclick = () => {
+  panel.style.display="block";
+  openPanel.style.display="none";
+};
+</script>
+
+</body>
+</html>

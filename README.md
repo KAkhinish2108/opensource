@@ -29,7 +29,4 @@ Just a clean, efficient system that delivers results.
 
 ---
 
-##  Project Structure  
 
-
-If you are comfortable with it then maybe you can use this.. otherwise no worries
